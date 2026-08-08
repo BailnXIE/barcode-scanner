@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>商店條碼掃描器 Demo</title>
+    <!-- 引入開源的相機掃描套件 -->
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <style>
+        body { font-family: sans-serif; text-align: center; padding: 20px; background-color: #f9f9f9; }
+        #reader { width: 100%; max-width: 400px; margin: 0 auto; background: white; }
+        #result-box { margin-top: 20px; padding: 20px; background: #fff; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); font-size: 1.2em; }
+        .price { color: #e53935; font-size: 1.5em; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <h2>簡易收銀掃描器</h2>
+    
+    <!-- 這裡是相機畫面會出現的地方 -->
+    <div id="reader"></div>
+    
+    <!-- 這裡是顯示商品資訊的地方 -->
+    <div id="result-box">請允許相機權限並掃描條碼...</div>
+
+    <script>
+        // 建立一個空的資料庫物件，用來裝 CSV 的資料
+        let productDatabase = {};
+
+        // 1. 讀取同資料夾下的 CSV 檔案
+        fetch('products_data.csv')
+            .then(response => response.text())
+            .then(csvText => {
+                const lines = csvText.split('\n'); // 將文字按行切開
+                
+                // 從第 2 行開始讀取 (略過第 1 行標題)
+                for (let i = 1; i < lines.length; i++) {
+                    if (lines[i].trim() === '') continue; // 略過空行
+                    
+                    // 用逗號切開：[條碼, 商品名稱, 價錢]
+                    const [barcode, name, price] = lines[i].split(',');
+                    
+                    // 存入資料庫中，以條碼當作鑰匙 (Key)
+                    productDatabase[barcode.trim()] = { 
+                        name: name.trim(), 
+                        price: price.trim() 
+                    };
+                }
+                console.log("CSV 資料載入完成！", productDatabase);
+                
+                // 資料載入完成後，啟動相機掃描器
+                startScanner();
+            })
+            .catch(err => {
+                document.getElementById('result-box').innerHTML = "<b>錯誤：無法讀取 CSV 檔案。請確認是否使用了本地伺服器環境。</b>";
+                console.error(err);
+            });
+
+        // 2. 啟動相機的函式
+        function startScanner() {
+            // 設定掃描框的範圍與更新率
+            const html5QrcodeScanner = new Html5QrcodeScanner(
+                "reader", { fps: 10, qrbox: {width: 250, height: 150} }, false);
+
+            html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+        }
+
+        // 3. 當成功掃描到條碼時會執行的動作
+        function onScanSuccess(decodedText, decodedResult) {
+            const resultBox = document.getElementById('result-box');
+            
+            // 拿掃描到的數字去資料庫找
+            const product = productDatabase[decodedText];
+
+            if (product) {
+                // 如果有找到，顯示名稱與價錢
+                resultBox.innerHTML = `
+                    <div style="font-size: 0.9em; color: gray;">掃描成功：${decodedText}</div>
+                    <div style="margin-top: 10px;">商品名稱：<strong>${product.name}</strong></div>
+                    <div style="margin-top: 10px;">售價：<span class="price">$${product.price}</span></div>
+                `;
+            } else {
+                // 如果沒找到
+                resultBox.innerHTML = `<span style="color:#f57c00;">系統內找不到條碼 ${decodedText}</span>`;
+            }
+        }
+
+        // 當相機沒掃到東西時（相機會每秒偵測好幾次，所以這裡留空即可）
+        function onScanFailure(error) {
+            // 不做任何事
+        }
+    </script>
+</body>
+</html>
