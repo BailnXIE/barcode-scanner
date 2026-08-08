@@ -60,6 +60,45 @@
         function startScanner() {
             // 設定掃描框的範圍與更新率
             const html5QrcodeScanner = new Html5QrcodeScanner(
+                "reader", 
+                { 
+                    fps: 20, // 提高每秒偵測次數
+                    qrbox: { width: 300, height: 100 }, // 變成寬扁的長方形，適合商品條碼
+                    aspectRatio: 1.0 // 穩定相機比例
+                }, 
+                false
+            );
+
+            html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+        }
+
+        // 3. 當成功掃描到條碼時會執行的動作
+        function onScanSuccess(decodedText, decodedResult) {
+            const resultBox = document.getElementById('result-box');
+            
+            // 拿掃描到的數字去資料庫找
+            const product = productDatabase[decodedText];
+
+            if (product) {
+                // 如果有找到，顯示名稱與價錢
+                resultBox.innerHTML = `
+                    <div style="font-size: 0.9em; color: gray;">掃描成功：${decodedText}</div>
+                    <div style="margin-top: 10px;">商品名稱：<strong>${product.name}</strong></div>
+                    <div style="margin-top: 10px;">售價：<span class="price">$${product.price}</span></div>
+                `;
+            } else {
+                // 如果沒找到
+                resultBox.innerHTML = `<span style="color:#f57c00;">系統內找不到條碼 ${decodedText}</span>`;
+            }
+        }
+
+        // 當相機沒掃到東西時（相機會每秒偵測好幾次，所以這裡留空即可）
+        function onScanFailure(error) {
+            // 不做任何事
+        }
+    </script>
+</body>
+</html>            const html5QrcodeScanner = new Html5QrcodeScanner(
                 "reader", { fps: 10, qrbox: {width: 250, height: 150} }, false);
 
             html5QrcodeScanner.render(onScanSuccess, onScanFailure);
