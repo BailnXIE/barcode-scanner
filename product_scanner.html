@@ -187,6 +187,26 @@
                 console.error(err);
             });
 
+        // UPC-A(12) 常被解成 EAN-13(前面補 0)，雙向相容查詢
+        function findProduct(rawCode) {
+            const code = String(rawCode).trim();
+            const candidates = [code];
+
+            if (/^\d{12}$/.test(code)) {
+                candidates.push("0" + code);
+            }
+            if (/^\d{13}$/.test(code) && code.startsWith("0")) {
+                candidates.push(code.slice(1));
+            }
+
+            for (const key of candidates) {
+                if (productDatabase[key]) {
+                    return { product: productDatabase[key], matchedCode: key, scannedCode: code };
+                }
+            }
+            return null;
+        }
+
         function initZxing() {
             if (typeof ZXing === "undefined") {
                 console.warn("ZXing 未載入，將只使用 html5-qrcode");
@@ -403,12 +423,13 @@
                 html5QrCode.clear();
                 console.log("相機已停止");
 
-                const product = productDatabase[decodedText];
+                const found = findProduct(decodedText);
                 const retryButton = `<br><button class="retry-btn" onclick="location.reload()">掃描下一個商品</button>`;
 
-                if (product) {
+                if (found) {
+                    const { product, scannedCode } = found;
                     resultBox.innerHTML = `
-                        <div style="font-size: 0.9em; color: gray;">掃描成功：${decodedText}</div>
+                        <div style="font-size: 0.9em; color: gray;">掃描成功：${scannedCode}</div>
                         <div style="margin-top: 10px;">品牌：<strong>${product.brand}</strong></div>
                         <div style="margin-top: 6px;">系列：${product.series}</div>
                         <div style="margin-top: 6px;">商品名稱：<strong>${product.name}</strong></div>
