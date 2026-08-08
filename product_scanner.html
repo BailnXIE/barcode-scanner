@@ -62,9 +62,11 @@
             const html5QrcodeScanner = new Html5QrcodeScanner(
             "reader", 
             { 
-                fps: 10,
-                // 1. 移除 qrbox，讓整個畫面都能掃描，不用再貼得很近
-                // 2. 明確告訴程式我們要掃描的是一維商品條碼，大幅提升速度
+                fps: 15, // 稍微加快偵測頻率
+                // 1. 恢復掃描框：設定為寬 250、高 120 的長方形，完美契合商品條碼
+                qrbox: { width: 250, height: 120 },
+                
+                // 2. 指定只找商品條碼，避免程式浪費力氣找 QR Code
                 formatsToSupport: [
                     Html5QrcodeSupportedFormats.EAN_13,
                     Html5QrcodeSupportedFormats.EAN_8,
@@ -72,7 +74,14 @@
                     Html5QrcodeSupportedFormats.UPC_E,
                     Html5QrcodeSupportedFormats.CODE_128,
                     Html5QrcodeSupportedFormats.CODE_39
-                ]
+                ],
+                
+                // 3. 終極殺手鐧：強制要求手機使用 HD 高解析度鏡頭！
+                videoConstraints: {
+                    facingMode: "environment", // 使用後置鏡頭
+                    width: { min: 1280, ideal: 1920 }, // 要求 1080p 畫質
+                    height: { min: 720, ideal: 1080 }
+                }
             }, 
             false
         );
