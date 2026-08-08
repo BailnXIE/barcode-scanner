@@ -19,13 +19,20 @@
         */
         #reader-clip {
             width: 100%;
-            max-width: 400px;
-            height: 140px;
+            max-width: 420px;
+            height: 160px;
             margin: 0 auto;
             overflow: hidden;
             border-radius: 12px;
             background: #000;
             position: relative;
+        }
+
+        #scan-hint {
+            margin: 10px auto 0;
+            max-width: 420px;
+            font-size: 0.9em;
+            color: #666;
         }
 
         #reader {
@@ -91,6 +98,7 @@
     <div id="reader-clip">
         <div id="reader"></div>
     </div>
+    <p id="scan-hint">小條碼請靠近至填滿綠框，並盡量在光線充足處掃描</p>
 
     <div id="result-box">請允許相機權限並掃描條碼...</div>
 
@@ -98,6 +106,35 @@
         let productDatabase = {};
         let html5QrCode;
         let isHandlingScan = false;
+
+        // 格式限制放在建構子；並啟用瀏覽器原生條碼偵測（有支援時通常更靈敏）
+        const scannerConfig = {
+            formatsToSupport: [
+                Html5QrcodeSupportedFormats.EAN_13,
+                Html5QrcodeSupportedFormats.EAN_8,
+                Html5QrcodeSupportedFormats.UPC_A,
+                Html5QrcodeSupportedFormats.UPC_E,
+                Html5QrcodeSupportedFormats.CODE_128,
+                Html5QrcodeSupportedFormats.CODE_39
+            ],
+            useBarCodeDetectorIfSupported: true
+        };
+
+        // 高解析 + 連續對焦，提升小條碼 / 低對比包裝辨識率
+        const hdConstraints = {
+            facingMode: "environment",
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            frameRate: { ideal: 30 },
+            focusMode: "continuous",
+            advanced: [{ focusMode: "continuous" }]
+        };
+
+        const basicConstraints = {
+            facingMode: "environment",
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+        };
 
         fetch('products_data.csv')
             .then(response => response.text())
@@ -119,39 +156,67 @@
                 console.error(err);
             });
 
-        function startScanner() {
-            html5QrCode = new Html5Qrcode("reader");
+        function buildScanConfig(videoConstraints) {
+            return {
+                fps: 30, // 提高嘗試次數，低對比較容易掃到
+                // 依實際畫面動態決定掃描框：條碼靠近時佔比較大、較好辨識
+                qrbox: (viewfinderWidth, viewfinderHeight) => {
+                    const width = Math.floor(Math.min(viewfinderWidth * 0.85, 360));
+                    const height = Math.floor(Math.min(viewfinderHeight * 0.35, 150));
+                    return { width, height };
+                },
+                disableFlip: false,
+                videoConstraints
+            };
+        }
 
+        function startScanner() {
+            html5QrCode = new Html5Qrcode("reader", scannerConfig);
+
+            // 先試 HD + 連續對焦；失敗再退回較寬鬆設定
             html5QrCode.start(
-                {
-                    facingMode: "environment"
-                },
-                {
-                    fps: 15,
-                    // 與 index.html 相同的長條掃描框
-                    qrbox: { width: 250, height: 120 },
-                    formatsToSupport: [
-                        Html5QrcodeSupportedFormats.EAN_13,
-                        Html5QrcodeSupportedFormats.EAN_8,
-                        Html5QrcodeSupportedFormats.UPC_A,
-                        Html5QrcodeSupportedFormats.UPC_E,
-                        Html5QrcodeSupportedFormats.CODE_128,
-                        Html5QrcodeSupportedFormats.CODE_39
-                    ],
-                    // 與 index.html 相同：要求 HD，條碼才容易辨識
-                    videoConstraints: {
-                        facingMode: "environment",
-                        width: { min: 1280, ideal: 1920 },
-                        height: { min: 720, ideal: 1080 }
-                    }
-                },
+                { facingMode: "environment" },
+                buildScanConfig(hdConstraints),
                 onScanSuccess,
                 onScanFailure
-            ).catch(err => {
+            ).then(() => {
+                enhanceCameraForSmallBarcodes();
+            }).catch(() => {
+                return html5QrCode.start(
+                    { facingMode: "environment" },
+                    buildScanConfig(basicConstraints),
+                    onScanSuccess,
+                    onScanFailure
+                ).then(() => {
+                    enhanceCameraForSmallBarcodes();
+                });
+            }).catch(err => {
                 document.getElementById('result-box').innerHTML =
                     "<b>無法開啟相機：</b>" + err;
                 console.error(err);
             });
+        }
+
+        // 裝置支援時：強制連續對焦，並略為變焦，讓小條碼佔更多像素
+        function enhanceCameraForSmallBarcodes() {
+            try {
+                const caps = html5QrCode.getRunningTrackCameraCapabilities();
+
+                if (caps.focusModeFeature().isSupported()) {
+                    caps.focusModeFeature().apply("continuous");
+                }
+
+                if (caps.zoomFeature().isSupported()) {
+                    const zoom = caps.zoomFeature();
+                    const min = zoom.min();
+                    const max = zoom.max();
+                    // 約 1.6x～2x，兼顧小條碼與對準難度
+                    const target = Math.min(max, Math.max(min, 1.8));
+                    zoom.apply(target);
+                }
+            } catch (err) {
+                console.log("此裝置不支援額外對焦/變焦強化", err);
+            }
         }
 
         function onScanSuccess(decodedText) {
