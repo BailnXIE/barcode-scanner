@@ -6,147 +6,98 @@
     <title>商店條碼掃描器 Demo</title>
     <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
     <style>
-        body {
-            font-family: sans-serif;
-            text-align: center;
-            padding: 20px;
-            background-color: #f9f9f9;
+        body { font-family: sans-serif; text-align: center; padding: 20px; background-color: #111111; color: white; margin: 0; }
+        
+        #reader { width: 100%; max-width: 400px; margin: 0 auto; background: black; border: none; }
+        
+        /* 讓框外變成純黑色，完美隱藏相機畫面 */
+        #qr-shaded-region {
+            background-color: #111111 !important; 
+            border-color: #111111 !important; 
         }
 
-        /* 容器大小 = 掃描框，多餘相機畫面被裁掉 */
-        #reader {
-            width: 140px;
-            height: 7px;
-            margin: 0 auto;
-            overflow: hidden;
-            border-radius: 12px;
-            background: #000;
-            position: relative;
-        }
-
-        #reader video {
-            width: 100% !important;
-            height: 100% !important;
-            object-fit: cover !important;
-            border: none !important;
-        }
-
-        /* 隱藏套件的上下遮罩區域 */
-        #reader #qr-shaded-region {
-            display: none !important;
-        }
-
-        /* 掃描框邊框提示 */
-        #reader::after {
-            content: "";
-            position: absolute;
-            inset: 0;
-            border: 2px solid #4CAF50;
-            border-radius: 12px;
-            pointer-events: none;
-            box-sizing: border-box;
-        }
-
-        #result-box {
-            margin-top: 20px;
-            padding: 20px;
-            background: #fff;
-            border-radius: 8px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            font-size: 1.2em;
-        }
-
-        .price {
-            color: #e53935;
-            font-size: 1.5em;
-            font-weight: bold;
-        }
-
-        .retry-btn {
-            margin-top: 15px;
-            padding: 10px 20px;
-            font-size: 1.1em;
-            background-color: #4CAF50;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-        }
+        #result-box { margin-top: 20px; padding: 20px; background: #ffffff; color: #333333; border-radius: 8px; font-size: 1.2em; }
+        .price { color: #e53935; font-size: 1.5em; font-weight: bold; }
+        
+        /* 重新掃描按鈕的樣式 */
+        .btn-restart { margin-top: 15px; padding: 12px 24px; font-size: 1.1em; background-color: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; width: 100%; font-weight: bold; }
     </style>
 </head>
 <body>
 
     <h2>簡易收銀掃描器</h2>
-
+    
     <div id="reader"></div>
-
-    <div id="result-box">請允許相機權限並掃描條碼...</div>
+    <div id="result-box">系統載入中，請稍候...</div>
 
     <script>
-        const QRBOX = { width: 280, height: 140 };
-
         let productDatabase = {};
-        let html5QrCode;
-        let isHandlingScan = false;
+        let html5QrCode; 
+        let isScanning = false; // 建立一個安全鎖，防止連續重複掃描
 
+        // 1. 讀取 CSV 檔案
         fetch('products_data.csv')
             .then(response => response.text())
             .then(csvText => {
-                const lines = csvText.split('\n');
+                const lines = csvText.split('\n'); 
                 for (let i = 1; i < lines.length; i++) {
-                    if (lines[i].trim() === '') continue;
+                    if (lines[i].trim() === '') continue; 
                     const [barcode, name, price] = lines[i].split(',');
-                    productDatabase[barcode.trim()] = {
-                        name: name.trim(),
-                        price: price.trim()
+                    productDatabase[barcode.trim()] = { 
+                        name: name.trim(), 
+                        price: price.trim() 
                     };
                 }
-                console.log("CSV 資料載入完成！", productDatabase);
+                document.getElementById('result-box').innerHTML = "請對準條碼進行掃描...";
                 startScanner();
             })
             .catch(err => {
-                document.getElementById('result-box').innerHTML = "<b>錯誤：無法讀取 CSV 檔案。</b>";
-                console.error(err);
+                document.getElementById('result-box').innerHTML = "<b style='color:red;'>錯誤：無法讀取 CSV 檔案。</b>";
             });
 
+        // 2. 使用底層 API 強制啟動高畫質相機
         function startScanner() {
             html5QrCode = new Html5Qrcode("reader");
 
-            html5QrCode.start(
-                { facingMode: "environment" },
-                {
-                    fps: 15,
-                    qrbox: QRBOX,
-                    formatsToSupport: [
-                        Html5QrcodeSupportedFormats.EAN_13,
-                        Html5QrcodeSupportedFormats.EAN_8,
-                        Html5QrcodeSupportedFormats.UPC_A,
-                        Html5QrcodeSupportedFormats.UPC_E,
-                        Html5QrcodeSupportedFormats.CODE_128,
-                        Html5QrcodeSupportedFormats.CODE_39
-                    ]
-                },
-                onScanSuccess,
-                onScanFailure
-            ).catch(err => {
-                document.getElementById('result-box').innerHTML =
-                    "<b>無法開啟相機：</b>" + err;
-                console.error(err);
-            });
+            // 強制高畫質設定
+            const cameraConfig = { 
+                facingMode: "environment",
+                width: { min: 1280, ideal: 1920 },
+                height: { min: 720, ideal: 1080 }
+            };
+
+            // 掃描框與支援格式設定
+            const scanConfig = {
+                fps: 15,
+                qrbox: { width: 250, height: 120 },
+                formatsToSupport: [
+                    Html5QrcodeSupportedFormats.EAN_13, Html5QrcodeSupportedFormats.EAN_8,
+                    Html5QrcodeSupportedFormats.UPC_A, Html5QrcodeSupportedFormats.UPC_E,
+                    Html5QrcodeSupportedFormats.CODE_128, Html5QrcodeSupportedFormats.CODE_39
+                ]
+            };
+
+            html5QrCode.start(cameraConfig, scanConfig, onScanSuccess, onScanFailure)
+                .then(() => {
+                    isScanning = true; // 相機成功啟動，打開安全鎖
+                })
+                .catch(err => {
+                    document.getElementById('result-box').innerHTML = "<b style='color:red;'>無法啟動相機，請確認權限。</b>";
+                });
         }
 
-        function onScanSuccess(decodedText) {
-            if (isHandlingScan) return;
-            isHandlingScan = true;
+        // 3. 掃描成功後的動作
+        function onScanSuccess(decodedText, decodedResult) {
+            if (!isScanning) return; // 如果已經掃描到了，就不再重複執行
+            isScanning = false;      // 立刻鎖上安全鎖
 
-            const resultBox = document.getElementById('result-box');
-
+            // 停止相機
             html5QrCode.stop().then(() => {
-                html5QrCode.clear();
-                console.log("相機已停止");
-
+                
+                // 相機停止後，顯示結果與重新整理按鈕
+                const resultBox = document.getElementById('result-box');
                 const product = productDatabase[decodedText];
-                const retryButton = `<br><button class="retry-btn" onclick="location.reload()">掃描下一個商品</button>`;
+                const retryButton = `<button class="btn-restart" onclick="location.reload()">掃描下一個商品</button>`;
 
                 if (product) {
                     resultBox.innerHTML = `
@@ -157,18 +108,18 @@
                     `;
                 } else {
                     resultBox.innerHTML = `
-                        <span style="color:#f57c00;">系統內找不到條碼 ${decodedText}</span>
+                        <div style="color:#f57c00; font-weight:bold; font-size:1.2em;">系統內找不到條碼</div>
+                        <div style="color:gray; font-size:0.9em; margin-top:5px;">${decodedText}</div>
                         ${retryButton}
                     `;
                 }
             }).catch(err => {
-                isHandlingScan = false;
                 console.error("無法停止相機", err);
             });
         }
 
-        function onScanFailure() {
-            // 掃描中未辨識到條碼時略過
+        function onScanFailure(error) {
+            // 掃描過程中略過錯誤
         }
     </script>
 </body>
