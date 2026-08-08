@@ -169,8 +169,11 @@
                 const lines = csvText.split('\n');
                 for (let i = 1; i < lines.length; i++) {
                     if (lines[i].trim() === '') continue;
-                    const [barcode, name, price] = lines[i].split(',');
+                    // 條碼,品牌,系列,商品名稱,價錢
+                    const [barcode, brand, series, name, price] = lines[i].split(',');
                     productDatabase[barcode.trim()] = {
+                        brand: brand.trim(),
+                        series: series.trim(),
                         name: name.trim(),
                         price: price.trim()
                     };
@@ -406,7 +409,9 @@
                 if (product) {
                     resultBox.innerHTML = `
                         <div style="font-size: 0.9em; color: gray;">掃描成功：${decodedText}</div>
-                        <div style="margin-top: 10px;">商品名稱：<strong>${product.name}</strong></div>
+                        <div style="margin-top: 10px;">品牌：<strong>${product.brand}</strong></div>
+                        <div style="margin-top: 6px;">系列：${product.series}</div>
+                        <div style="margin-top: 6px;">商品名稱：<strong>${product.name}</strong></div>
                         <div style="margin-top: 10px;">售價：<span class="price">$${product.price}</span></div>
                         ${retryButton}
                     `;
