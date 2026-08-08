@@ -4,43 +4,101 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>商店條碼掃描器 Demo</title>
-    <!-- 引入開源的相機掃描套件 -->
     <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
     <style>
-        body { font-family: sans-serif; text-align: center; padding: 20px; background-color: #f9f9f9; }
-        #reader { width: 100%; max-width: 400px; margin: 0 auto; background: white; }
-        #result-box { margin-top: 20px; padding: 20px; background: #fff; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); font-size: 1.2em; }
-        .price { color: #e53935; font-size: 1.5em; font-weight: bold; }
+        body {
+            font-family: sans-serif;
+            text-align: center;
+            padding: 20px;
+            background-color: #f9f9f9;
+        }
+
+        /* 容器大小 = 掃描框，多餘相機畫面被裁掉 */
+        #reader {
+            width: 280px;
+            height: 140px;
+            margin: 0 auto;
+            overflow: hidden;
+            border-radius: 12px;
+            background: #000;
+            position: relative;
+        }
+
+        #reader video {
+            width: 100% !important;
+            height: 100% !important;
+            object-fit: cover !important;
+            border: none !important;
+        }
+
+        /* 隱藏套件的上下遮罩區域 */
+        #reader #qr-shaded-region {
+            display: none !important;
+        }
+
+        /* 掃描框邊框提示 */
+        #reader::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            border: 2px solid #4CAF50;
+            border-radius: 12px;
+            pointer-events: none;
+            box-sizing: border-box;
+        }
+
+        #result-box {
+            margin-top: 20px;
+            padding: 20px;
+            background: #fff;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            font-size: 1.2em;
+        }
+
+        .price {
+            color: #e53935;
+            font-size: 1.5em;
+            font-weight: bold;
+        }
+
+        .retry-btn {
+            margin-top: 15px;
+            padding: 10px 20px;
+            font-size: 1.1em;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
 
     <h2>簡易收銀掃描器</h2>
-    
-    <!-- 這裡是相機畫面會出現的地方 -->
+
     <div id="reader"></div>
-    
-    <!-- 這裡是顯示商品資訊的地方 -->
+
     <div id="result-box">請允許相機權限並掃描條碼...</div>
 
     <script>
-        // 建立一個空的資料庫物件
+        const QRBOX = { width: 280, height: 140 };
+
         let productDatabase = {};
-        
-        // 【修改重點 1】將掃描器變數宣告在最外面，讓所有函式都能控制它
-        let html5QrcodeScanner;
-    
-        // 1. 讀取同資料夾下的 CSV 檔案
+        let html5QrCode;
+        let isHandlingScan = false;
+
         fetch('products_data.csv')
             .then(response => response.text())
             .then(csvText => {
-                const lines = csvText.split('\n'); 
+                const lines = csvText.split('\n');
                 for (let i = 1; i < lines.length; i++) {
-                    if (lines[i].trim() === '') continue; 
+                    if (lines[i].trim() === '') continue;
                     const [barcode, name, price] = lines[i].split(',');
-                    productDatabase[barcode.trim()] = { 
-                        name: name.trim(), 
-                        price: price.trim() 
+                    productDatabase[barcode.trim()] = {
+                        name: name.trim(),
+                        price: price.trim()
                     };
                 }
                 console.log("CSV 資料載入完成！", productDatabase);
@@ -50,14 +108,15 @@
                 document.getElementById('result-box').innerHTML = "<b>錯誤：無法讀取 CSV 檔案。</b>";
                 console.error(err);
             });
-    
-        // 2. 啟動相機的函式
+
         function startScanner() {
-            html5QrcodeScanner = new Html5QrcodeScanner(
-                "reader", 
-                { 
+            html5QrCode = new Html5Qrcode("reader");
+
+            html5QrCode.start(
+                { facingMode: "environment" },
+                {
                     fps: 15,
-                    qrbox: { width: 250, height: 120 },
+                    qrbox: QRBOX,
                     formatsToSupport: [
                         Html5QrcodeSupportedFormats.EAN_13,
                         Html5QrcodeSupportedFormats.EAN_8,
@@ -66,29 +125,30 @@
                         Html5QrcodeSupportedFormats.CODE_128,
                         Html5QrcodeSupportedFormats.CODE_39
                     ]
-                }, 
-                false
-            );
-    
-            html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+                },
+                onScanSuccess,
+                onScanFailure
+            ).catch(err => {
+                document.getElementById('result-box').innerHTML =
+                    "<b>無法開啟相機：</b>" + err;
+                console.error(err);
+            });
         }
-    
-        // 3. 當成功掃描到條碼時會執行的動作
-        function onScanSuccess(decodedText, decodedResult) {
+
+        function onScanSuccess(decodedText) {
+            if (isHandlingScan) return;
+            isHandlingScan = true;
+
             const resultBox = document.getElementById('result-box');
-            
-            // 【修改重點 2】掃描成功後，立刻停止並清除相機畫面
-            html5QrcodeScanner.clear().then(() => {
+
+            html5QrCode.stop().then(() => {
+                html5QrCode.clear();
                 console.log("相機已停止");
-    
-                // 拿掃描到的數字去資料庫找
+
                 const product = productDatabase[decodedText];
-    
-                // 準備一個「繼續掃描」的按鈕，點擊後會重新整理網頁
-                const retryButton = `<br><button onclick="location.reload()" style="margin-top: 15px; padding: 10px 20px; font-size: 1.1em; background-color: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer;">掃描下一個商品</button>`;
-    
+                const retryButton = `<br><button class="retry-btn" onclick="location.reload()">掃描下一個商品</button>`;
+
                 if (product) {
-                    // 如果有找到，顯示名稱、價錢，以及繼續掃描按鈕
                     resultBox.innerHTML = `
                         <div style="font-size: 0.9em; color: gray;">掃描成功：${decodedText}</div>
                         <div style="margin-top: 10px;">商品名稱：<strong>${product.name}</strong></div>
@@ -96,24 +156,19 @@
                         ${retryButton}
                     `;
                 } else {
-                    // 如果沒找到，顯示錯誤提示，以及繼續掃描按鈕
                     resultBox.innerHTML = `
                         <span style="color:#f57c00;">系統內找不到條碼 ${decodedText}</span>
                         ${retryButton}
                     `;
                 }
             }).catch(err => {
+                isHandlingScan = false;
                 console.error("無法停止相機", err);
             });
         }
-    
-        // 當相機沒掃到東西時
-        function onScanFailure(error) {
-            // 不做任何事
-        }
-        // 當相機沒掃到東西時（相機會每秒偵測好幾次，所以這裡留空即可）
-        function onScanFailure(error) {
-            // 不做任何事
+
+        function onScanFailure() {
+            // 掃描中未辨識到條碼時略過
         }
     </script>
 </body>
