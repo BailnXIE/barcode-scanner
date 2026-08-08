@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>商店條碼掃描器 Demo</title>
     <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <!-- ZXing：支援 TRY_HARDER / HybridBinarizer，專門強化難掃的一維條碼 -->
+    <script src="https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"></script>
     <style>
         body {
             font-family: sans-serif;
@@ -13,10 +15,6 @@
             background-color: #f9f9f9;
         }
 
-        /*
-          外層只顯示中間掃描帶（視覺裁切）。
-          內層 #reader 維持較大寬度，讓相機解析度 / qrbox 計算跟 index.html 一樣好掃。
-        */
         #reader-clip {
             width: 100%;
             max-width: 420px;
@@ -35,6 +33,15 @@
             color: #666;
         }
 
+        #controls {
+            margin: 12px auto 0;
+            max-width: 420px;
+            display: flex;
+            gap: 8px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
         #reader {
             width: 100%;
             position: absolute;
@@ -48,7 +55,6 @@
             border: none !important;
         }
 
-        /* 隱藏套件遮罩；畫面上下非掃描區由 #reader-clip 裁掉 */
         #reader #qr-shaded-region {
             display: none !important;
         }
@@ -79,15 +85,29 @@
             font-weight: bold;
         }
 
-        .retry-btn {
-            margin-top: 15px;
-            padding: 10px 20px;
-            font-size: 1.1em;
+        .retry-btn,
+        .ctrl-btn {
+            padding: 10px 16px;
+            font-size: 1em;
             background-color: #4CAF50;
             color: white;
             border: none;
             border-radius: 5px;
             cursor: pointer;
+        }
+
+        .ctrl-btn {
+            background-color: #455a64;
+        }
+
+        .ctrl-btn.active {
+            background-color: #f9a825;
+            color: #222;
+        }
+
+        .ctrl-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
         }
     </style>
 </head>
@@ -98,7 +118,10 @@
     <div id="reader-clip">
         <div id="reader"></div>
     </div>
-    <p id="scan-hint">請保持約 15–25 公分，等畫面清晰後再對準綠框（太近手機會無法對焦）</p>
+    <p id="scan-hint">保持 15–25 公分，等畫面清晰後對準。紙盒低對比可開手電筒；系統會做對比強化與多幀確認。</p>
+    <div id="controls">
+        <button id="torch-btn" class="ctrl-btn" type="button" disabled>手電筒</button>
+    </div>
 
     <div id="result-box">請允許相機權限並掃描條碼...</div>
 
@@ -106,8 +129,13 @@
         let productDatabase = {};
         let html5QrCode;
         let isHandlingScan = false;
+        let torchOn = false;
+        let enhanceTimer = null;
+        let recentHits = [];
+        let zxingReader = null;
+        let enhanceCanvas = null;
+        let enhanceCtx = null;
 
-        // 格式限制放在建構子；並啟用瀏覽器原生條碼偵測（有支援時通常更靈敏）
         const scannerConfig = {
             formatsToSupport: [
                 Html5QrcodeSupportedFormats.EAN_13,
@@ -120,7 +148,6 @@
             useBarCodeDetectorIfSupported: true
         };
 
-        // 高解析 + 連續對焦，提升小條碼 / 低對比包裝辨識率
         const hdConstraints = {
             facingMode: "environment",
             width: { ideal: 1920 },
@@ -149,6 +176,7 @@
                     };
                 }
                 console.log("CSV 資料載入完成！", productDatabase);
+                initZxing();
                 startScanner();
             })
             .catch(err => {
@@ -156,10 +184,33 @@
                 console.error(err);
             });
 
+        function initZxing() {
+            if (typeof ZXing === "undefined") {
+                console.warn("ZXing 未載入，將只使用 html5-qrcode");
+                return;
+            }
+
+            const hints = new Map();
+            // 主流優化：花更多時間、多角度嘗試（類似「盡力糾錯/搜尋」）
+            hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+            hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [
+                ZXing.BarcodeFormat.EAN_13,
+                ZXing.BarcodeFormat.EAN_8,
+                ZXing.BarcodeFormat.UPC_A,
+                ZXing.BarcodeFormat.UPC_E,
+                ZXing.BarcodeFormat.CODE_128,
+                ZXing.BarcodeFormat.CODE_39
+            ]);
+
+            zxingReader = new ZXing.MultiFormatReader();
+            zxingReader.setHints(hints);
+            enhanceCanvas = document.createElement("canvas");
+            enhanceCtx = enhanceCanvas.getContext("2d", { willReadFrequently: true });
+        }
+
         function buildScanConfig(videoConstraints) {
             return {
                 fps: 30,
-                // 掃描框稍大：不必貼很近也能掃，避免超過最近對焦距離
                 qrbox: (viewfinderWidth, viewfinderHeight) => {
                     const width = Math.floor(Math.min(viewfinderWidth * 0.9, 400));
                     const height = Math.floor(Math.min(viewfinderHeight * 0.4, 180));
@@ -173,14 +224,13 @@
         function startScanner() {
             html5QrCode = new Html5Qrcode("reader", scannerConfig);
 
-            // 先試 HD + 連續對焦；失敗再退回較寬鬆設定
             html5QrCode.start(
                 { facingMode: "environment" },
                 buildScanConfig(hdConstraints),
                 onScanSuccess,
                 onScanFailure
             ).then(() => {
-                ensureNaturalFocus();
+                onCameraReady();
             }).catch(() => {
                 return html5QrCode.start(
                     { facingMode: "environment" },
@@ -188,7 +238,7 @@
                     onScanSuccess,
                     onScanFailure
                 ).then(() => {
-                    ensureNaturalFocus();
+                    onCameraReady();
                 });
             }).catch(err => {
                 document.getElementById('result-box').innerHTML =
@@ -197,15 +247,18 @@
             });
         }
 
-        // 只用連續對焦；強制把變焦拉回最小，避免靠近時糊掉
+        function onCameraReady() {
+            ensureNaturalFocus();
+            setupTorchButton();
+            startEnhancedDecodeLoop();
+        }
+
         function ensureNaturalFocus() {
             try {
                 const caps = html5QrCode.getRunningTrackCameraCapabilities();
-
                 if (caps.zoomFeature().isSupported()) {
                     caps.zoomFeature().apply(caps.zoomFeature().min());
                 }
-
                 if (caps.focusModeFeature().isSupported()) {
                     caps.focusModeFeature().apply("continuous");
                 }
@@ -214,11 +267,134 @@
             }
         }
 
+        function setupTorchButton() {
+            const btn = document.getElementById("torch-btn");
+            try {
+                const caps = html5QrCode.getRunningTrackCameraCapabilities();
+                if (!caps.torchFeature().isSupported()) {
+                    btn.textContent = "手電筒（不支援）";
+                    btn.disabled = true;
+                    return;
+                }
+                btn.disabled = false;
+                btn.onclick = () => {
+                    torchOn = !torchOn;
+                    caps.torchFeature().apply(torchOn);
+                    btn.classList.toggle("active", torchOn);
+                    btn.textContent = torchOn ? "關閉手電筒" : "手電筒";
+                };
+            } catch (err) {
+                btn.textContent = "手電筒（不支援）";
+                btn.disabled = true;
+            }
+        }
+
+        // 對比拉伸：紙盒低對比常見優化
+        function stretchContrast(imageData) {
+            const d = imageData.data;
+            let min = 255;
+            let max = 0;
+
+            for (let i = 0; i < d.length; i += 4) {
+                const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+                if (g < min) min = g;
+                if (g > max) max = g;
+            }
+
+            const range = Math.max(18, max - min);
+            for (let i = 0; i < d.length; i += 4) {
+                const g = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+                let v = ((g - min) / range) * 255;
+                // 再稍微加重對比，幫助灰底印刷
+                v = (v - 128) * 1.35 + 128;
+                v = Math.max(0, Math.min(255, v));
+                d[i] = d[i + 1] = d[i + 2] = v;
+            }
+            return imageData;
+        }
+
+        function tryZxingDecode(canvas) {
+            if (!zxingReader) return null;
+
+            try {
+                const source = new ZXing.HTMLCanvasElementLuminanceSource(canvas);
+                // HybridBinarizer：局部閾值，適合光線不均的紙質包裝
+                const bitmap = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(source));
+                const result = zxingReader.decode(bitmap);
+                zxingReader.reset();
+                return result.getText();
+            } catch (e1) {
+                try {
+                    // 反相再試：深色底淺色條、或曝光異常時有用
+                    const source = new ZXing.HTMLCanvasElementLuminanceSource(canvas);
+                    const inverted = new ZXing.InvertedLuminanceSource(source);
+                    const bitmap = new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(inverted));
+                    const result = zxingReader.decode(bitmap);
+                    zxingReader.reset();
+                    return result.getText();
+                } catch (e2) {
+                    try { zxingReader.reset(); } catch (_) {}
+                    return null;
+                }
+            }
+        }
+
+        // 多幀確認：連續兩次以上相同結果才算成功，降低誤讀
+        function confirmByMultiFrame(text) {
+            recentHits.push(text);
+            if (recentHits.length > 6) recentHits.shift();
+            return recentHits.filter((t) => t === text).length >= 2;
+        }
+
+        function startEnhancedDecodeLoop() {
+            if (!zxingReader || enhanceTimer) return;
+
+            enhanceTimer = setInterval(() => {
+                if (isHandlingScan) return;
+
+                const video = document.querySelector("#reader video");
+                if (!video || video.readyState < 2) return;
+
+                const vw = video.videoWidth;
+                const vh = video.videoHeight;
+                if (!vw || !vh) return;
+
+                // 只取畫面中央掃描帶，對應綠框區域
+                const cropH = Math.floor(vh * 0.42);
+                const cropY = Math.floor((vh - cropH) / 2);
+                const cropW = Math.floor(vw * 0.92);
+                const cropX = Math.floor((vw - cropW) / 2);
+
+                enhanceCanvas.width = cropW;
+                enhanceCanvas.height = cropH;
+                enhanceCtx.drawImage(video, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+                const raw = enhanceCtx.getImageData(0, 0, cropW, cropH);
+                enhanceCtx.putImageData(stretchContrast(raw), 0, 0);
+
+                const decoded = tryZxingDecode(enhanceCanvas);
+                if (decoded && confirmByMultiFrame(decoded)) {
+                    onScanSuccess(decoded);
+                }
+            }, 220);
+        }
+
+        function stopEnhancedDecodeLoop() {
+            if (enhanceTimer) {
+                clearInterval(enhanceTimer);
+                enhanceTimer = null;
+            }
+            recentHits = [];
+        }
+
         function onScanSuccess(decodedText) {
             if (isHandlingScan) return;
             isHandlingScan = true;
+            stopEnhancedDecodeLoop();
 
             const resultBox = document.getElementById('result-box');
+            const torchBtn = document.getElementById("torch-btn");
+            torchBtn.disabled = true;
 
             html5QrCode.stop().then(() => {
                 html5QrCode.clear();
@@ -247,7 +423,7 @@
         }
 
         function onScanFailure() {
-            // 掃描中未辨識到條碼時略過
+            // html5-qrcode 未辨識時略過；強化迴圈會另外嘗試
         }
     </script>
 </body>
