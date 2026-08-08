@@ -98,7 +98,7 @@
     <div id="reader-clip">
         <div id="reader"></div>
     </div>
-    <p id="scan-hint">小條碼請靠近至填滿綠框，並盡量在光線充足處掃描</p>
+    <p id="scan-hint">請保持約 15–25 公分，等畫面清晰後再對準綠框（太近手機會無法對焦）</p>
 
     <div id="result-box">請允許相機權限並掃描條碼...</div>
 
@@ -158,11 +158,11 @@
 
         function buildScanConfig(videoConstraints) {
             return {
-                fps: 30, // 提高嘗試次數，低對比較容易掃到
-                // 依實際畫面動態決定掃描框：條碼靠近時佔比較大、較好辨識
+                fps: 30,
+                // 掃描框稍大：不必貼很近也能掃，避免超過最近對焦距離
                 qrbox: (viewfinderWidth, viewfinderHeight) => {
-                    const width = Math.floor(Math.min(viewfinderWidth * 0.85, 360));
-                    const height = Math.floor(Math.min(viewfinderHeight * 0.35, 150));
+                    const width = Math.floor(Math.min(viewfinderWidth * 0.9, 400));
+                    const height = Math.floor(Math.min(viewfinderHeight * 0.4, 180));
                     return { width, height };
                 },
                 disableFlip: false,
@@ -180,7 +180,7 @@
                 onScanSuccess,
                 onScanFailure
             ).then(() => {
-                enhanceCameraForSmallBarcodes();
+                ensureNaturalFocus();
             }).catch(() => {
                 return html5QrCode.start(
                     { facingMode: "environment" },
@@ -188,7 +188,7 @@
                     onScanSuccess,
                     onScanFailure
                 ).then(() => {
-                    enhanceCameraForSmallBarcodes();
+                    ensureNaturalFocus();
                 });
             }).catch(err => {
                 document.getElementById('result-box').innerHTML =
@@ -197,25 +197,20 @@
             });
         }
 
-        // 裝置支援時：強制連續對焦，並略為變焦，讓小條碼佔更多像素
-        function enhanceCameraForSmallBarcodes() {
+        // 只用連續對焦；強制把變焦拉回最小，避免靠近時糊掉
+        function ensureNaturalFocus() {
             try {
                 const caps = html5QrCode.getRunningTrackCameraCapabilities();
+
+                if (caps.zoomFeature().isSupported()) {
+                    caps.zoomFeature().apply(caps.zoomFeature().min());
+                }
 
                 if (caps.focusModeFeature().isSupported()) {
                     caps.focusModeFeature().apply("continuous");
                 }
-
-                if (caps.zoomFeature().isSupported()) {
-                    const zoom = caps.zoomFeature();
-                    const min = zoom.min();
-                    const max = zoom.max();
-                    // 約 1.6x～2x，兼顧小條碼與對準難度
-                    const target = Math.min(max, Math.max(min, 1.8));
-                    zoom.apply(target);
-                }
             } catch (err) {
-                console.log("此裝置不支援額外對焦/變焦強化", err);
+                console.log("無法調整對焦設定", err);
             }
         }
 
